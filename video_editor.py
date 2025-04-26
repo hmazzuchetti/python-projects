@@ -111,6 +111,15 @@ def add_caption_to_video(video_path: str, caption_text: str, output_path: str = 
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         video_duration = frame_count / fps
         
+        # Calculate the number of additional frames for 3-second buffer
+        buffer_seconds = 3.0
+        buffer_frames = int(buffer_seconds * fps)
+        new_frame_count = frame_count + buffer_frames
+        
+        print(f"Original video duration: {video_duration:.2f} seconds ({frame_count} frames)")
+        print(f"Adding {buffer_seconds} seconds buffer ({buffer_frames} frames)")
+        print(f"New video duration: {(video_duration + buffer_seconds):.2f} seconds ({new_frame_count} frames)")
+        
         # Create video writer
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Use mp4v codec
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
@@ -166,7 +175,7 @@ def add_caption_to_video(video_path: str, caption_text: str, output_path: str = 
         else:
             stroke_color = config.CAPTION_STROKE_COLOR
         
-        print(f"Processing video with {frame_count} frames...")
+        print(f"Processing video with {frame_count} frames plus {buffer_frames} buffer frames...")
             
         # For word-by-word animation
         if word_by_word:
@@ -175,12 +184,20 @@ def add_caption_to_video(video_path: str, caption_text: str, output_path: str = 
             num_words = len(words)
             
             # Use audio duration if provided, otherwise use video duration
-            duration_to_use = audio_duration if audio_duration is not None else video_duration
-            print(f"Using duration: {duration_to_use:.2f} seconds for {num_words} words")
+            # But ensure we use at least the video duration to prevent cutting the video
+            # Add buffer seconds to ensure text doesn't get cut at the end
+            duration_to_use = video_duration
+            if audio_duration is not None:
+                # Make sure we're using the longer of video or audio duration
+                duration_to_use = max(video_duration, audio_duration)
+                
+            # Add buffer for text display
+            text_display_duration = duration_to_use + buffer_seconds
+            print(f"Using duration: {text_display_duration:.2f} seconds for {num_words} words")
             
             # Calculate how many frames each word should appear
             # Each word gets an equal portion of the total duration
-            seconds_per_word = duration_to_use / num_words
+            seconds_per_word = text_display_duration / num_words
             frames_per_word = int(seconds_per_word * fps)
             
             # Ensure minimum visibility (at least 0.3 seconds per word)
@@ -201,6 +218,7 @@ def add_caption_to_video(video_path: str, caption_text: str, output_path: str = 
             current_word = ""
             word_frame_count = 0
             
+            # Process original video frames
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -208,7 +226,7 @@ def add_caption_to_video(video_path: str, caption_text: str, output_path: str = 
                     
                 frame_number += 1
                 if frame_number % 100 == 0 or frame_number == 1:
-                    print(f"Processing frame {frame_number}/{frame_count}")
+                    print(f"Processing frame {frame_number}/{new_frame_count}")
                 
                 # Determine which word to show
                 word_frame_count += 1
@@ -216,7 +234,7 @@ def add_caption_to_video(video_path: str, caption_text: str, output_path: str = 
                     word_frame_count = 1
                     current_word_index += 1
                     if current_word_index >= len(words):
-                        current_word_index = 0  # Loop through words if video is longer
+                        current_word_index = len(words) - 1  # Stay on last word instead of looping
                     current_word = words[current_word_index]
                 
                 # Calculate alpha (transparency) for fade effect
@@ -290,6 +308,102 @@ def add_caption_to_video(video_path: str, caption_text: str, output_path: str = 
                 
                 # Write the frame to the output video
                 out.write(cv_frame)
+            
+            # Get the last frame to duplicate for buffer
+            if frame_number > 0:
+                # Reset cap to get the last frame
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number - 1)
+                ret, last_frame = cap.read()
+                
+                if ret:
+                    print(f"Adding {buffer_frames} buffer frames using last frame...")
+                    
+                    # Add buffer frames using the last frame
+                    for i in range(buffer_frames):
+                        frame_number += 1
+                        if frame_number % 100 == 0:
+                            print(f"Processing buffer frame {i+1}/{buffer_frames} (total: {frame_number}/{new_frame_count})")
+                        
+                        # Continue word animation in buffer frames
+                        word_frame_count += 1
+                        if word_frame_count > frames_per_word:
+                            word_frame_count = 1
+                            current_word_index += 1
+                            if current_word_index >= len(words):
+                                current_word_index = len(words) - 1  # Stay on last word
+                            current_word = words[current_word_index]
+                        
+                        # Calculate alpha for buffer frames
+                        alpha = 255  # Full opacity
+                        if word_frame_count <= fade_frames:  # Fade in
+                            alpha = int(255 * (word_frame_count / fade_frames))
+                        elif word_frame_count > frames_per_word - fade_frames:  # Fade out
+                            alpha = int(255 * ((frames_per_word - word_frame_count) / fade_frames))
+                        
+                        # Ensure alpha is within bounds
+                        alpha = max(0, min(255, alpha))
+                        
+                        # Create a sample image to measure current word dimensions
+                        sample_img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+                        sample_draw = ImageDraw.Draw(sample_img)
+                        text_bbox = sample_draw.textbbox((0, 0), current_word, font=font)
+                        text_width = text_bbox[2] - text_bbox[0]
+                        text_height = text_bbox[3] - text_bbox[1]
+                        
+                        # Center the text both horizontally and vertically
+                        text_x = (width - text_width) // 2
+                        text_y = (height - text_height) // 2
+                        
+                        # Convert OpenCV BGR to RGB for Pillow
+                        rgb_frame = cv2.cvtColor(last_frame, cv2.COLOR_BGR2RGB)
+                        
+                        # Create a Pillow Image from the frame
+                        pil_image = Image.fromarray(rgb_frame)
+                        
+                        # Create a transparent overlay for the background
+                        overlay = Image.new('RGBA', pil_image.size, (0, 0, 0, 0))
+                        overlay_draw = ImageDraw.Draw(overlay)
+                        
+                        # Add semi-transparent background for better readability
+                        background_padding = 10
+                        background_x1 = text_x - background_padding
+                        background_y1 = text_y - background_padding
+                        background_x2 = text_x + text_width + background_padding
+                        background_y2 = text_y + text_height + background_padding
+                        
+                        # Draw semi-transparent background with fade effect
+                        background_alpha = min(128, alpha // 2)
+                        overlay_draw.rectangle(
+                            [background_x1, background_y1, background_x2, background_y2],
+                            fill=(0, 0, 0, background_alpha)
+                        )
+                        
+                        # Convert PIL image to RGBA if it's not already
+                        if pil_image.mode != 'RGBA':
+                            pil_image = pil_image.convert('RGBA')
+                            
+                        # Composite the overlay onto the image
+                        pil_image = Image.alpha_composite(pil_image, overlay)
+                        
+                        # Draw text with stroke and adjusted opacity
+                        draw = ImageDraw.Draw(pil_image)
+                        text_color_with_alpha = text_color + (alpha,)
+                        stroke_color_with_alpha = stroke_color + (alpha,)
+                        
+                        draw.text(
+                            (text_x, text_y),
+                            current_word,
+                            font=font,
+                            fill=text_color_with_alpha,
+                            stroke_width=config.CAPTION_STROKE_WIDTH,
+                            stroke_fill=stroke_color_with_alpha
+                        )
+                        
+                        # Convert back to OpenCV format
+                        cv_frame = cv2.cvtColor(np.array(pil_image.convert('RGB')), cv2.COLOR_RGB2BGR)
+                        
+                        # Write the buffer frame to the output video
+                        out.write(cv_frame)
         else:
             # Original implementation for displaying the entire caption text
             # Create a sample image to measure text dimensions
