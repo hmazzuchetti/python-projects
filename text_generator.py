@@ -25,7 +25,7 @@ def generate_text(prompt: str = config.TEXT_PROMPT, model: str = config.TEXT_MOD
         print(f"Using Ollama with model: {model}")
         
         # Let's try a more direct prompt that skips the thinking
-        direct_prompt = "Create one short, motivational quote (under 300 characters). Don't include any explanations, just the quote."
+        direct_prompt = "Create one short, motivational quote (higher than 200 characters and under 500 characters). Don't include any explanations, just the quote."
         
         # Try with the chat API first since it tends to follow instructions better
         return generate_text_with_chat(direct_prompt, model)
